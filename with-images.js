@@ -1,60 +1,64 @@
-const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
+const { google } = require('googleapis');
+const { GoogleAuth } = require('google-auth-library');
 
-// Replace with your own folder ID
+const credentials = JSON.parse(fs.readFileSync('./token.json'));
 const folderId = '1RQDH8bIfWL4GtF8mF8XT-brJeLEl9N2G';
 
-// Replace with your own credentials file name
-const credentialsFile = './token.json'
-
-// Create a new instance of the drive API with the specified credentials
-const auth = new google.auth.GoogleAuth({
-  keyFile: path.resolve(__dirname, credentialsFile),
-  scopes: ['https://www.googleapis.com/auth/drive.readonly']
-});
-const drive = google.drive({ version: 'v3', auth });
-
-async function getImageUrls() {
-  // Get a list of all the files in the folder
-  const res = await drive.files.list({
-    q: `'${folderId}' in parents and trashed = false`,
-    fields: 'nextPageToken, files(id, name, mimeType)',
-  });
-
-  const images = [];
-
-  // Loop through each file in the folder
-  for (const file of res.data.files) {
-    // Check if the file is an image
-    if (file.mimeType.startsWith('image/')) {
-      try {
-        // Get a shareable link to the image
-        const { data } = await drive.permissions.create({
-          fileId: file.id,
-          requestBody: {
-            role: 'reader',
-            type: 'anyone',
-          },
-        });
-
-        const imageUrl = `https://drive.google.com/uc?id=${file.id}&export=download`;
-
-        images.push({ name: file.name, imageUrl });
-      } catch (err) {
-        console.error(`Could not retrieve image URL for file ${file.name}: ${err.message}`);
-      }
+const auth = new GoogleAuth(
+    {
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/drive']
     }
-  }
+);
 
-  return images;
-}
 
-(async function() {
-  try {
-    const images = await getImageUrls();
-    console.log(images);
-  } catch (err) {
-    console.error(`Failed to retrieve images: ${err.message}`);
-  }
-})();
+const drive = google.drive({
+    version: 'v3',
+    auth
+});
+
+const getImagesUrls = async () => {
+    const res = await drive.files.list({
+        q: `'${folderId}' in parents`,
+        fields: 'nextPageToken, files(id, name)'
+    });
+
+    console.log(res.data.files)
+    const imagesUrls = res.data.files.reduce((result, { id, name }) => {
+        const imageName = path.parse(name).name;
+        const imageUrl = `https://drive.google.com/uc?id=${id}`;
+        return { ...result, [imageName]: imageUrl };
+    }, {});
+
+    return imagesUrls;
+};
+
+const addImageUrl = async () => {
+    const data = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'geocollection.json')));
+    const imagesUrls = await getImagesUrls();
+
+
+
+    fs.writeFileSync(path.resolve(__dirname, 'data-with-urls.json'), JSON.stringify(imagesUrls));
+
+
+    const updatedData = data.features.map(feature => {
+        const imageId = feature.properties.image_id;
+        const imageName = imageId.split('.')[0];
+        const imageUrl = imagesUrls[imageName];
+
+        return {
+            ...feature,
+            properties: {
+                ...feature.properties,
+                img_url: imageUrl
+            }
+        };
+    });
+
+    fs.writeFileSync(path.resolve(__dirname, 'data-with-image-urls.json'), JSON.stringify(updatedData));
+};
+
+addImageUrl();
